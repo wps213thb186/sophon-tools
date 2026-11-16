@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .agents.manager import STATE_FILE, AgentManager
 from .api import (admin_api, agent_proxy, agents_api, apps_api, asr_stream_api,
-                  docs as api_docmeta, logs_api, mcp_api, openai_api)
+                  docs as api_docmeta, logs_api, mcp_api, moishome_api, openai_api)
 from .apps.kb.ingest import Ingestor
 from .apps.kb.store import KbStore
 from .core.auth import AdminSessions, require_admin_docs
@@ -216,7 +216,18 @@ def create_app(
         # one owner for its lifetime, on the same shutdown path that reaps the
         # workers it would otherwise try to reap.
         app.state.models.start_idle_sweeper()
+        # Optional MoisHome open-platform bridge: only contacts the cloud when
+        # MOISHOME_BASE_URL is set; heartbeat loop is further gated by
+        # MOISHOME_HEARTBEAT=1. Never on the inference hot path.
+        try:
+            await app.state.moishome.start_heartbeat()
+        except Exception:  # pragma: no cover - cloud must not block offline boot
+            logger.exception("MoisHome heartbeat start failed")
         yield
+        try:
+            await app.state.moishome.stop_heartbeat()
+        except Exception:  # pragma: no cover
+            logger.exception("MoisHome heartbeat stop failed")
         # Agents first: they are clients of this service, so stopping them
         # before the models keeps their shutdown from seeing a dead provider.
         await app.state.agents.shutdown()
@@ -273,6 +284,11 @@ def create_app(
     )
     app.state.sessions = AdminSessions.load_or_create(data_dir / "session.key")
     app.state.clients = {}
+    # MoisHome device-api bridge (optional). Always attached so /moishome/status
+    # can report disabled; cloud calls require MOISHOME_BASE_URL.
+    from .moishome.service import MoishomeBridge
+
+    app.state.moishome = MoishomeBridge.from_state_dir(data_dir)
     # The platform log file, beside the worker logs it sits next to in the
     # console. stderr keeps its handler: the journal is the operator's safety
     # net when this file cannot be written, and the two are not in competition.
@@ -592,6 +608,9 @@ def create_app(
     # name this prefix (OpenClaw's controlUi.basePath). Mounted before the SPA
     # fallback below, which would otherwise serve index.html for them.
     app.include_router(agent_proxy.router, tags=["agent-proxy"])
+    # Outside /api on purpose: keeps the admin OpenAPI table unchanged, and
+    # keeps cloud catalog routes away from local GET /api/catalog (dfss).
+    app.include_router(moishome_api.router, tags=["moishome"])
 
     @app.get("/healthz")
     async def healthz():

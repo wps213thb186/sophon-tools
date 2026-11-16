@@ -11,6 +11,7 @@ from .client import DeviceApiClient
 from .config import OpenPlatformConfig
 from .credentials import CredentialStore, DeviceCredentials
 from .http import DeviceApiError, MoishomeApiError
+from .service import MoishomeBridge
 
 __all__ = [
     "CredentialStore",
@@ -18,5 +19,6 @@ __all__ = [
     "DeviceApiError",
     "DeviceCredentials",
     "MoishomeApiError",
+    "MoishomeBridge",
     "OpenPlatformConfig",
 ]

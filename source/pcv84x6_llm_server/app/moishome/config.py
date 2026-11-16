@@ -21,6 +21,13 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = _env(name)
+    if not raw:
+        return default
+    return raw.lower() in ("1", "true", "yes", "on")
+
+
 def default_credentials_path(state_dir: Path | None = None, data_dir: Path | None = None) -> Path:
     """``<data_dir>/state/moishome_device.json`` (or ``<state_dir>/moishome_device.json``)."""
     override = _env("MOISHOME_CREDENTIALS_PATH")
@@ -62,6 +69,7 @@ class OpenPlatformConfig:
     identity_file: Path | None = None
     heartbeat_interval_s: float = 60.0
     timeout_s: float = 15.0
+    heartbeat_enabled: bool = False
 
     @classmethod
     def from_env(
@@ -79,8 +87,12 @@ class OpenPlatformConfig:
             firmware = str(pkg_version)
 
         identity_raw = _env("MOISHOME_IDENTITY_FILE")
+        base_url = _env("MOISHOME_BASE_URL").rstrip("/")
+        # Background heartbeat only when explicitly opted in (never surprise a
+        # board that merely has a URL in the env file).
+        heartbeat = _env_truthy("MOISHOME_HEARTBEAT", False)
         return cls(
-            base_url=_env("MOISHOME_BASE_URL").rstrip("/"),
+            base_url=base_url,
             serial=_env("MOISHOME_SERIAL"),
             temp_key=_env("MOISHOME_TEMP_KEY"),
             sku=_env("MOISHOME_SKU"),
@@ -95,7 +107,13 @@ class OpenPlatformConfig:
                 "MOISHOME_HTTP_TIMEOUT_S",
                 _env_float("MOISHOME_TIMEOUT_S", 15.0),
             ),
+            heartbeat_enabled=heartbeat,
         )
+
+    @property
+    def enabled(self) -> bool:
+        """True when a platform root URL is configured (cloud path may run)."""
+        return bool(self.base_url)
 
     def api_root(self) -> str:
         return api_base(self.base_url)
