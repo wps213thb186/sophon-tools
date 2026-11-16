@@ -6,6 +6,11 @@ __pycache__/
 /data/
 /models/
 *.log
+# MoisHome formal device credentials (never commit).
+**/moishome/credentials.json
+**/moishome-credentials.json
+**/moishome_device.json
+moishome_device.json.tmp
 # The built console IS committed: the board has no node toolchain, so the
 # deployable artifact has to be in the tree.
 web/node_modules/

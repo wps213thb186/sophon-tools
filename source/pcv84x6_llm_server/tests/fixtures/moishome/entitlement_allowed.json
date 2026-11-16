@@ -1,0 +1,8 @@
+{
+  "allowed": true,
+  "entitlementId": "ent_fixture_1",
+  "expiresAt": "2099-01-01T00:00:00.000Z",
+  "scope": ["skill", "*"],
+  "metering": "deferred",
+  "capability": "skill:smoke"
+}

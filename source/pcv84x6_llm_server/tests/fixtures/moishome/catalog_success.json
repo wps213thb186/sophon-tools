@@ -1,0 +1,24 @@
+{
+  "products": [
+    {
+      "id": "prod_1",
+      "name": "Fixture Product",
+      "download": { "url": "https://example.invalid/prod.tar", "sha256": "abc" }
+    }
+  ],
+  "models": [],
+  "agents": [],
+  "skills": [
+    {
+      "id": "skill_smoke",
+      "name": "Smoke Skill",
+      "download": { "url": "https://example.invalid/skill.zip", "sha256": "def" }
+    }
+  ],
+  "mcp": [],
+  "plugins": [],
+  "compat": {
+    "applied": false,
+    "reason": "no_mapping_or_table_missing"
+  }
+}

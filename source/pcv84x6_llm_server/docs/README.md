@@ -23,6 +23,7 @@
 | [`mcp.md`](mcp.md) | MCP 服务（`POST /mcp`）：Streamable HTTP 与 JSON-RPC 分层、九个工具（知识库 / OCR / 语音转写）、本地路径白名单与单描述符读取、资源上限、Origin 校验、三个内置 agent 的接入格式与实测证据、stdio 桥接、外部客户端怎么接 |
 | [`agents-dsh.md`](agents-dsh.md) | DSH（DeepSeek Harness）Web agent：安装包构成、按行合并的配置与每个字段的实测依据、`--profile web` 的启动参数顺序、启动 token 的代理交接（Host/Origin、cookie 收窄）、健康检查、重置/同步/卸载 |
 | [`model-release.md`](model-release.md) | 更换模型文件：dfss 下载标签（`--dflag`）的机制、发布步骤、设备侧的「有新版本」与一键更新、回退与常见失败 |
+| [`moishome/README.md`](moishome/README.md) | MoisHome 开放平台对接层（`app/moishome`）：activate / heartbeat / shadow / catalog / entitlement；与本地 `/api/catalog` 分离 |
 | [`ocr-stage-a.md`](ocr-stage-a.md) | PaddleOCR-VL 接入可行性：版面检测切掉 TopK 后在板上跑通的实测、vit 与参考对齐的逐层证据与根因（阶段 A + A2） |
 | [`ocr-structure.md`](ocr-structure.md) | 表格与复杂版面识别：PP-DocLayout-S/-M + SLANet_plus 的编译、切图/展开的根因、板上对齐数字、整页原型的耗时构成，以及是否接入 `/v1/ocr` 的建议 |
 | [`ocr-vl.md`](ocr-vl.md) | PaddleOCR-VL-1.5：解码段（A3 段错误的真正根因、C++ KV cache 方案与三个静默 bug、与 x86 参考的逐 token 对齐、表格 OTSL、整页耗时与内存）**+ 服务接口**（`/v1/chat/completions`、`ocr_vl` 类型、常驻引擎、与 MYS-2660 的逐 token 复核、官方客户端兼容、真机数字）**+ 整页模式**（`/v1/ocr` 的 `mode: "vl"`：两 worker 编排、OTSL→HTML 与 PaddleX 对拍、区域合并、与原设计的偏差） |
