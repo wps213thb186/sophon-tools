@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "data": {
+    "serverTime": "2026-11-16T00:01:00.000Z",
+    "shadow": {
+      "desired": {},
+      "reported": {
+        "firmware": "0.6.37",
+        "configVersion": 0,
+        "lastHeartbeatAt": "2026-11-16T00:01:00.000Z"
+      },
+      "desiredVersion": 0,
+      "reportedVersion": 1,
+      "configVersion": 0
+    },
+    "config": {
+      "targetType": "device",
+      "targetId": "dev_fixture_001",
+      "version": 3,
+      "config": { "feature": "fixture" }
+    },
+    "pendingOta": {
+      "jobId": "ota_job_fixture",
+      "status": "pending",
+      "taskId": "ota_task_fixture",
+      "task": "fw-1.2.0",
+      "firmware": {
+        "id": "fw_fixture",
+        "name": "zetao-fw",
+        "version": "1.2.0",
+        "url": "https://cdn.example.invalid/fw.bin",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeLabel": "12MB"
+      }
+    },
+    "compat": { "applied": false, "reason": "no_mapping_or_table_missing" }
+  },
+  "requestId": "req_heartbeat_fixture"
+}

@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "data": {
+    "deviceId": "dev_fixture_001",
+    "serial": "SN-ZETAO-FIXTURE-001",
+    "activatedAt": "2026-11-16T00:00:00.000Z",
+    "credential": "mh_dev_fixture_credential_placeholder",
+    "credentialPrefix": "mh_dev_fixtu",
+    "stockStatus": "outbound",
+    "bindingStatus": "unbound",
+    "customerBound": false
+  },
+  "requestId": "req_activate_fixture"
+}

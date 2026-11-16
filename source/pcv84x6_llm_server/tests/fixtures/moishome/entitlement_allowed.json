@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "data": {
+    "allowed": true,
+    "entitlementId": "ent_fixture",
+    "capability": "skill:foo",
+    "expiresAt": "2099-01-01T00:00:00.000Z",
+    "scope": ["*"],
+    "metering": "deferred"
+  },
+  "requestId": "req_ent_ok_fixture"
+}

@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "data": {
+    "allowed": false,
+    "code": "ENTITLEMENT_REQUIRED",
+    "reason": "设备尚未绑定客户授权；平台激活换票 ≠ 客户授权绑定"
+  },
+  "requestId": "req_ent_required_fixture"
+}

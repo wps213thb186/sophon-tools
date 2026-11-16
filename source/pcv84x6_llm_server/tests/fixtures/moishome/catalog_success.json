@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "data": {
+    "query": {
+      "model": "cv84x6",
+      "sku": "64G",
+      "isv": null,
+      "line": "A"
+    },
+    "compat": { "applied": false, "reason": "no_mapping_or_table_missing" },
+    "products": [
+      {
+        "id": "pkg_fixture",
+        "name": "Fixture Package",
+        "line": "A",
+        "version": "1.0.0",
+        "status": "published",
+        "download": { "kind": "product", "id": "pkg_fixture" }
+      }
+    ],
+    "models": [],
+    "agents": [],
+    "skills": [],
+    "mcp": [],
+    "plugins": []
+  },
+  "requestId": "req_catalog_fixture"
+}
