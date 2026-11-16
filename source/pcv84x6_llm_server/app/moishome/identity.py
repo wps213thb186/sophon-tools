@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class DeviceIdentity:
     serial: str
     sku: str = ""
-    model: str = "CV84X6"
+    model: str = ""
 
 
 def _from_file(path: Path) -> dict:
@@ -38,7 +38,7 @@ def _first_nonempty(*values: str) -> str:
 
 
 def resolve_identity(cfg: OpenPlatformConfig) -> DeviceIdentity:
-    """Resolve SN / SKU / model: env fields → identity JSON → defaults."""
+    """Resolve SN / SKU / model: env fields → identity JSON → empty."""
 
     file_data: dict = {}
     if cfg.identity_file is not None:
@@ -46,7 +46,7 @@ def resolve_identity(cfg: OpenPlatformConfig) -> DeviceIdentity:
 
     serial = _first_nonempty(cfg.serial, str(file_data.get("serial") or ""))
     sku = _first_nonempty(cfg.sku, str(file_data.get("sku") or ""))
-    model = _first_nonempty(cfg.model, str(file_data.get("model") or ""), "CV84X6")
+    model = _first_nonempty(cfg.model, str(file_data.get("model") or ""))
     return DeviceIdentity(serial=serial, sku=sku, model=model)
 
 

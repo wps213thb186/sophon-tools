@@ -6,6 +6,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+API_PREFIX = "/api/v1"
+CREDENTIALS_FILENAME = "moishome_device.json"
+
 
 def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
@@ -18,51 +21,81 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
-def _env_path(name: str) -> Path | None:
-    raw = _env(name)
-    return Path(raw).expanduser() if raw else None
+def default_credentials_path(state_dir: Path | None = None, data_dir: Path | None = None) -> Path:
+    """``<data_dir>/state/moishome_device.json`` (or ``<state_dir>/moishome_device.json``)."""
+    override = _env("MOISHOME_CREDENTIALS_PATH")
+    if override:
+        return Path(override).expanduser()
+    if state_dir is not None:
+        return Path(state_dir) / CREDENTIALS_FILENAME
+    root = Path(data_dir) if data_dir is not None else Path(_env("CV84X6_DATA_DIR") or ".")
+    return root / "state" / CREDENTIALS_FILENAME
+
+
+def api_base(platform_root: str) -> str:
+    """Join platform root (no ``/api/v1``) with the API prefix."""
+    root = platform_root.rstrip("/")
+    if not root:
+        raise ValueError("MOISHOME_BASE_URL is required (platform root, without /api/v1)")
+    if root.endswith(API_PREFIX):
+        # Tolerate accidental inclusion; canonical is without the prefix.
+        return root
+    return f"{root}{API_PREFIX}"
 
 
 @dataclass(frozen=True)
 class OpenPlatformConfig:
     """Connection and identity knobs for the open platform.
 
-    ``base_url`` must include the API prefix (``…/api/v1``). Paths below are
-    relative to that root (``/device-api/…``).
+    ``base_url`` is the **platform root** (no ``/api/v1``). The HTTP layer
+    appends the prefix.
     """
 
     base_url: str
     serial: str = ""
     temp_key: str = ""
     sku: str = ""
-    model: str = "CV84X6"
-    firmware: str = "0.0.0"
+    model: str = ""
+    firmware: str = ""
     config_version: int = 0
     credentials_path: Path | None = None
     identity_file: Path | None = None
     heartbeat_interval_s: float = 60.0
-    timeout_s: float = 30.0
+    timeout_s: float = 15.0
 
     @classmethod
-    def from_env(cls, data_dir: Path | None = None) -> "OpenPlatformConfig":
-        creds = _env_path("MOISHOME_CREDENTIALS_PATH")
-        if creds is None and data_dir is not None:
-            creds = Path(data_dir) / "state" / "moishome" / "credentials.json"
+    def from_env(
+        cls,
+        *,
+        state_dir: Path | None = None,
+        data_dir: Path | None = None,
+    ) -> "OpenPlatformConfig":
+        firmware = _env("MOISHOME_FIRMWARE")
+        if not firmware:
+            try:
+                from .. import __version__ as pkg_version
+            except Exception:  # pragma: no cover - package always present in-tree
+                pkg_version = "0.0.0"
+            firmware = str(pkg_version)
+
+        identity_raw = _env("MOISHOME_IDENTITY_FILE")
         return cls(
             base_url=_env("MOISHOME_BASE_URL").rstrip("/"),
             serial=_env("MOISHOME_SERIAL"),
             temp_key=_env("MOISHOME_TEMP_KEY"),
             sku=_env("MOISHOME_SKU"),
-            model=_env("MOISHOME_MODEL", "CV84X6"),
-            firmware=_env("MOISHOME_FIRMWARE", "0.0.0"),
+            model=_env("MOISHOME_MODEL"),
+            firmware=firmware,
             config_version=int(_env("MOISHOME_CONFIG_VERSION", "0") or "0"),
-            credentials_path=creds,
-            identity_file=_env_path("MOISHOME_IDENTITY_FILE"),
+            credentials_path=default_credentials_path(state_dir=state_dir, data_dir=data_dir),
+            identity_file=Path(identity_raw).expanduser() if identity_raw else None,
             heartbeat_interval_s=_env_float("MOISHOME_HEARTBEAT_INTERVAL_S", 60.0),
-            timeout_s=_env_float("MOISHOME_TIMEOUT_S", 30.0),
+            # Prefer design name; keep TIMEOUT_S as alias for earlier draft.
+            timeout_s=_env_float(
+                "MOISHOME_HTTP_TIMEOUT_S",
+                _env_float("MOISHOME_TIMEOUT_S", 15.0),
+            ),
         )
 
-    def require_base_url(self) -> str:
-        if not self.base_url:
-            raise ValueError("MOISHOME_BASE_URL is required (include /api/v1)")
-        return self.base_url
+    def api_root(self) -> str:
+        return api_base(self.base_url)

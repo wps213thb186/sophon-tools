@@ -1,0 +1,10 @@
+{
+  "deviceId": "dev_fixture_001",
+  "serial": "SN-FACTORY-001",
+  "activatedAt": "2026-11-16T00:00:00.000Z",
+  "credential": "mh_dev_fixture_formal_credential",
+  "credentialPrefix": "mh_dev_fixture",
+  "stockStatus": "outbound",
+  "bindingStatus": "unbound",
+  "customerBound": false
+}

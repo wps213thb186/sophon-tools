@@ -17,185 +17,151 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .client import DeviceApiClient, DeviceApiError
-from .config import OpenPlatformConfig
-from .credentials import CredentialStore, DeviceCredentials
-from .identity import require_serial, resolve_identity
-from .runtime import HeartbeatLoop, activate_and_persist, load_or_activate, run_cycle
+from .client import DeviceApiClient
+from .config import OpenPlatformConfig, default_credentials_path
+from .credentials import CredentialStore
+from .http import MoishomeApiError
+from .identity import resolve_identity
+from .runtime import HeartbeatLoop
 
 
 def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2, default=str)
 
 
-def _cfg() -> OpenPlatformConfig:
-    data_dir = os.environ.get("CV84X6_DATA_DIR")
-    return OpenPlatformConfig.from_env(Path(data_dir) if data_dir else None)
+def _state_dir() -> Path | None:
+    raw = os.environ.get("MOISHOME_STATE_DIR") or os.environ.get("CV84X6_DATA_DIR")
+    if not raw:
+        return None
+    p = Path(raw)
+    # If CV84X6_DATA_DIR was given, from_env already nests state/; for MOISHOME_STATE_DIR
+    # treat it as the state directory itself when the name says so.
+    if os.environ.get("MOISHOME_STATE_DIR"):
+        return p
+    return None
 
 
-def _store(cfg: OpenPlatformConfig) -> CredentialStore:
-    path = cfg.credentials_path
-    if path is None:
-        path = Path(os.environ.get("TMPDIR") or "/tmp") / "moishome-credentials.json"
-    return CredentialStore(path)
+def _data_dir() -> Path | None:
+    raw = os.environ.get("CV84X6_DATA_DIR")
+    return Path(raw) if raw and not os.environ.get("MOISHOME_STATE_DIR") else None
 
 
-def _client_with_creds(cfg: OpenPlatformConfig) -> tuple[DeviceApiClient, DeviceCredentials, CredentialStore]:
-    identity = resolve_identity(cfg)
-    require_serial(identity)
-    store = _store(cfg)
-    client = DeviceApiClient(cfg, serial=identity.serial)
-    creds = load_or_activate(cfg, client, store, identity)
-    return client, creds, store
+def _client() -> DeviceApiClient:
+    return DeviceApiClient.from_env(state_dir=_state_dir(), data_dir=_data_dir())
 
 
 def cmd_activate(_: argparse.Namespace) -> int:
-    cfg = _cfg()
-    identity = resolve_identity(cfg)
-    serial = require_serial(identity)
-    if not cfg.temp_key:
-        print("MOISHOME_TEMP_KEY required", file=sys.stderr)
-        return 2
-    store = _store(cfg)
-    with DeviceApiClient(cfg, serial=serial) as client:
-        creds = activate_and_persist(client, store, serial=serial, temp_key=cfg.temp_key)
-    print(_json(creds.public_dict()))
-    print(f"persisted: {store.path}", file=sys.stderr)
+    with _client() as client:
+        creds = client.activate()
+        print(_json(creds.public_dict()))
+        if client.store is not None:
+            print(f"persisted: {client.store.path}", file=sys.stderr)
     return 0
 
 
 def cmd_heartbeat(_: argparse.Namespace) -> int:
-    cfg = _cfg()
-    identity = resolve_identity(cfg)
-    client, _, _ = _client_with_creds(cfg)
-    try:
-        out = run_cycle(client, cfg, identity, pull_shadow=False, auto_ack=False)
-        if out.errors:
-            print("\n".join(out.errors), file=sys.stderr)
-            return 1
-        print(_json(out.heartbeat))
-        return 0
-    finally:
-        client.close()
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
+        print(_json(client.heartbeat()))
+    return 0
 
 
 def cmd_shadow(_: argparse.Namespace) -> int:
-    cfg = _cfg()
-    client, _, _ = _client_with_creds(cfg)
-    try:
-        print(_json(client.get_shadow()))
-        return 0
-    finally:
-        client.close()
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
+        print(_json(client.shadow()))
+    return 0
 
 
 def cmd_catalog(args: argparse.Namespace) -> int:
-    cfg = _cfg()
-    identity = resolve_identity(cfg)
-    client, _, _ = _client_with_creds(cfg)
-    try:
-        data = client.get_catalog(
-            model=args.model or identity.model,
-            sku=args.sku or identity.sku,
-            isv=args.isv or "",
-            types=args.types or "",
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
+        print(
+            _json(
+                client.cloud_catalog(
+                    model=args.model or "",
+                    sku=args.sku or "",
+                    isv=args.isv or "",
+                    types=args.types or "",
+                )
+            )
         )
-        print(_json(data))
-        return 0
-    finally:
-        client.close()
+    return 0
 
 
 def cmd_entitlement_check(args: argparse.Namespace) -> int:
-    cfg = _cfg()
-    client, _, _ = _client_with_creds(cfg)
-    try:
-        data = client.check_entitlement(
-            capability=args.capability or "",
-            content_id=args.content_id or "",
-            content_type=args.content_type or "",
-            product_id=args.product_id or "",
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
+        print(
+            _json(
+                client.entitlement_check(
+                    capability=args.capability or "",
+                    content_id=args.content_id or "",
+                    content_type=args.content_type or "",
+                    product_id=args.product_id or "",
+                )
+            )
         )
-        print(_json(data))
-        return 0
-    finally:
-        client.close()
+    return 0
 
 
 def cmd_ota_ack(args: argparse.Namespace) -> int:
-    cfg = _cfg()
-    client, _, _ = _client_with_creds(cfg)
-    try:
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
         print(_json(client.ack_ota(args.job_id, args.status, reason=args.reason or "")))
-        return 0
-    finally:
-        client.close()
+    return 0
 
 
 def cmd_config_ack(args: argparse.Namespace) -> int:
-    cfg = _cfg()
-    client, _, _ = _client_with_creds(cfg)
-    try:
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
         print(_json(client.ack_config(args.version)))
-        return 0
-    finally:
-        client.close()
+    return 0
 
 
 def cmd_compat(_: argparse.Namespace) -> int:
-    cfg = _cfg()
-    client, _, _ = _client_with_creds(cfg)
-    try:
-        print(_json(client.get_compat()))
-        return 0
-    finally:
-        client.close()
+    with _client() as client:
+        if client.credentials is None:
+            client.activate()
+        print(_json(client.compat()))
+    return 0
 
 
 def cmd_heartbeat_loop(args: argparse.Namespace) -> int:
-    cfg = _cfg()
-    loop = HeartbeatLoop(cfg, store=_store(cfg))
+    cfg = OpenPlatformConfig.from_env(state_dir=_state_dir(), data_dir=_data_dir())
+    path = cfg.credentials_path or default_credentials_path(
+        state_dir=_state_dir(), data_dir=_data_dir()
+    )
+    loop = HeartbeatLoop(cfg, store=CredentialStore(path))
     loop.run(once=args.once, max_ticks=args.max_ticks)
     return 0
 
 
 def cmd_smoke(_: argparse.Namespace) -> int:
-    """Ordered smoke against a live platform (requires env fixtures)."""
-    cfg = _cfg()
-    identity = resolve_identity(cfg)
-    require_serial(identity)
-    store = _store(cfg)
     steps: list[tuple[str, Any]] = []
-
-    with DeviceApiClient(cfg, serial=identity.serial) as client:
+    with _client() as client:
         try:
-            creds = load_or_activate(cfg, client, store, identity)
+            if client.credentials is None or not client.credentials.credential:
+                creds = client.activate()
+            else:
+                creds = client.credentials
             steps.append(("activate_or_load", creds.public_dict()))
-            hb = client.heartbeat(
-                firmware=cfg.firmware,
-                config_version=cfg.config_version,
-                attributes={"sku": identity.sku, "model": identity.model}
-                if (identity.sku or identity.model)
-                else None,
-            )
-            steps.append(("heartbeat", hb))
-            steps.append(("shadow", client.get_shadow()))
-            steps.append(
-                (
-                    "catalog",
-                    client.get_catalog(model=identity.model, sku=identity.sku),
-                )
-            )
+            steps.append(("heartbeat", client.heartbeat()))
+            steps.append(("shadow", client.shadow()))
+            steps.append(("cloud_catalog", client.cloud_catalog(types="products")))
             steps.append(
                 (
                     "entitlement_check",
-                    client.check_entitlement(
-                        content_type="skill",
-                        capability="skill:smoke",
-                    ),
+                    client.entitlement_check(content_type="skill", capability="skill:smoke"),
                 )
             )
-        except DeviceApiError as exc:
+        except MoishomeApiError as exc:
             print(
                 _json(
                     {
@@ -211,26 +177,29 @@ def cmd_smoke(_: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-
     print(_json({"ok": True, "steps": [{"name": n, "data": d} for n, d in steps]}))
     return 0
 
 
 def cmd_status(_: argparse.Namespace) -> int:
-    cfg = _cfg()
-    store = _store(cfg)
+    cfg = OpenPlatformConfig.from_env(state_dir=_state_dir(), data_dir=_data_dir())
     identity = resolve_identity(cfg)
+    path = cfg.credentials_path or default_credentials_path(
+        state_dir=_state_dir(), data_dir=_data_dir()
+    )
+    store = CredentialStore(path)
     creds = store.load()
     print(
         _json(
             {
                 "baseUrl": cfg.base_url or None,
+                "apiRoot": f"{cfg.api_root()}" if cfg.base_url else None,
                 "identity": {
                     "serial": identity.serial or None,
                     "sku": identity.sku or None,
-                    "model": identity.model,
+                    "model": identity.model or None,
                 },
-                "credentialsPath": str(store.path),
+                "credentialsPath": str(path),
                 "activated": bool(creds and creds.credential),
                 "credentials": creds.public_dict() if creds and creds.credential else None,
             }
@@ -253,7 +222,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("shadow", help="GET /device-api/shadow").set_defaults(func=cmd_shadow)
     sub.add_parser("compat", help="GET /device-api/compat").set_defaults(func=cmd_compat)
 
-    cat = sub.add_parser("catalog", help="GET /device-api/catalog (cloud; not local /api/catalog)")
+    cat = sub.add_parser(
+        "catalog",
+        help="GET /device-api/catalog via cloud_catalog (NOT local /api/catalog)",
+    )
     cat.add_argument("--model", default="")
     cat.add_argument("--sku", default="")
     cat.add_argument("--isv", default="")
@@ -282,9 +254,10 @@ def build_parser() -> argparse.ArgumentParser:
     loop.add_argument("--max-ticks", type=int, default=None)
     loop.set_defaults(func=cmd_heartbeat_loop)
 
-    sub.add_parser("smoke", help="activate/load → heartbeat → shadow → catalog → entitlement").set_defaults(
-        func=cmd_smoke
-    )
+    sub.add_parser(
+        "smoke",
+        help="activate/load → heartbeat → shadow → cloud_catalog → entitlement_check",
+    ).set_defaults(func=cmd_smoke)
     return p
 
 
@@ -294,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except DeviceApiError as exc:
+    except MoishomeApiError as exc:
         print(
             _json(
                 {

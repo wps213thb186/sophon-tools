@@ -1,58 +1,69 @@
-"""HTTP client for MoisHome ``/device-api/*`` (envelope-aware)."""
+"""``DeviceApiClient`` — MoisHome ``/device-api/*`` surface."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 import httpx
 
 from .config import OpenPlatformConfig
-from .credentials import DeviceCredentials
+from .credentials import CredentialStore, DeviceCredentials
+from .http import MoishomeApiError, build_url, request_json
+from .identity import resolve_identity
 
 logger = logging.getLogger(__name__)
 
-
-class DeviceApiError(RuntimeError):
-    """Open-platform device-api failure (transport, HTTP, or ``ok: false``)."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "",
-        status: int | None = None,
-        request_id: str = "",
-        body: Any = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.status = status
-        self.request_id = request_id
-        self.body = body
+# Re-export for callers that import errors from client.
+DeviceApiError = MoishomeApiError
 
 
 class DeviceApiClient:
-    """Minimal sync client; safe to call from a thread or a short CLI."""
+    """Minimal sync client for activate / heartbeat / shadow / catalog / entitlement.
+
+    Optional library: constructing it does not touch the offline LLM service.
+    """
 
     def __init__(
         self,
         cfg: OpenPlatformConfig,
         *,
-        credential: str = "",
-        serial: str = "",
+        store: CredentialStore | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.cfg = cfg
-        self.base_url = cfg.require_base_url()
-        self.credential = credential
-        self.serial = serial
+        self.api_root = cfg.api_root()
+        self.store = store or (
+            CredentialStore(cfg.credentials_path)
+            if cfg.credentials_path is not None
+            else None
+        )
+        self._creds = self.store.load() if self.store is not None else None
+        identity = resolve_identity(cfg)
+        self.serial = (self._creds.serial if self._creds else "") or identity.serial or cfg.serial
+        self.sku = identity.sku or cfg.sku
+        self.model = identity.model or cfg.model
         self._client = httpx.Client(
             timeout=cfg.timeout_s,
             transport=transport,
-            headers={"Accept": "application/json", "User-Agent": "cv84x6-moishome-device-api/1.0"},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "cv84x6-moishome-device-api/1.0",
+            },
         )
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        state_dir: Path | None = None,
+        data_dir: Path | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> "DeviceApiClient":
+        cfg = OpenPlatformConfig.from_env(state_dir=state_dir, data_dir=data_dir)
+        store = CredentialStore(cfg.credentials_path) if cfg.credentials_path else None
+        return cls(cfg, store=store, transport=transport)
 
     def close(self) -> None:
         self._client.close()
@@ -63,81 +74,35 @@ class DeviceApiClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def use_credentials(self, creds: DeviceCredentials) -> None:
-        self.credential = creds.credential
-        self.serial = creds.serial
+    # -- credential helpers -------------------------------------------------
 
-    def _url(self, path: str, query: dict[str, str] | None = None) -> str:
-        path = path if path.startswith("/") else f"/{path}"
-        url = f"{self.base_url}{path}"
-        if query:
-            filtered = {k: v for k, v in query.items() if v}
-            if filtered:
-                url = f"{url}?{urlencode(filtered)}"
-        return url
+    @property
+    def credentials(self) -> DeviceCredentials | None:
+        return self._creds
+
+    @property
+    def config_version(self) -> int:
+        if self._creds is not None:
+            return int(self._creds.config_version)
+        return int(self.cfg.config_version)
+
+    def _require_activated(self) -> DeviceCredentials:
+        if self._creds is None or not self._creds.credential:
+            raise MoishomeApiError(
+                "device not activated; call activate() first",
+                code="UNAUTHENTICATED",
+            )
+        return self._creds
 
     def _auth_headers(self, serial: str | None = None) -> dict[str, str]:
-        sn = serial or self.serial
-        if not self.credential:
-            raise DeviceApiError("formal credential missing; activate first", code="UNAUTHENTICATED")
+        creds = self._require_activated()
+        sn = serial or self.serial or creds.serial
         if not sn:
-            raise DeviceApiError("serial missing for authenticated call", code="VALIDATION_FAILED")
+            raise MoishomeApiError("serial missing for authenticated call", code="VALIDATION_FAILED")
         return {
-            "Authorization": f"Bearer {self.credential}",
+            "Authorization": f"Bearer {creds.credential}",
             "x-device-serial": sn,
         }
-
-    def _parse(self, resp: httpx.Response) -> Any:
-        request_id = resp.headers.get("x-request-id", "")
-        try:
-            payload = resp.json()
-        except ValueError as exc:
-            raise DeviceApiError(
-                f"non-JSON response ({resp.status_code})",
-                status=resp.status_code,
-                request_id=request_id,
-                body=resp.text[:500],
-            ) from exc
-
-        if isinstance(payload, dict) and "ok" in payload:
-            request_id = str(payload.get("requestId") or request_id)
-            if not payload.get("ok"):
-                err = payload.get("error") or {}
-                if not isinstance(err, dict):
-                    err = {"message": str(err)}
-                code = str(err.get("code") or "ERROR")
-                message = str(err.get("message") or code)
-                raise DeviceApiError(
-                    message,
-                    code=code,
-                    status=resp.status_code,
-                    request_id=request_id,
-                    body=payload,
-                )
-            if resp.status_code >= 400:
-                raise DeviceApiError(
-                    f"HTTP {resp.status_code} with ok envelope",
-                    code="HTTP_ERROR",
-                    status=resp.status_code,
-                    request_id=request_id,
-                    body=payload,
-                )
-            return payload.get("data")
-
-        if resp.status_code >= 400:
-            code = ""
-            message = f"HTTP {resp.status_code}"
-            if isinstance(payload, dict):
-                code = str(payload.get("code") or "")
-                message = str(payload.get("message") or message)
-            raise DeviceApiError(
-                message,
-                code=code or "HTTP_ERROR",
-                status=resp.status_code,
-                request_id=request_id,
-                body=payload,
-            )
-        return payload
 
     def _request(
         self,
@@ -146,35 +111,45 @@ class DeviceApiClient:
         *,
         json_body: dict[str, Any] | None = None,
         query: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None,
         auth: bool = False,
         serial: str | None = None,
     ) -> Any:
-        hdrs = dict(headers or {})
+        headers: dict[str, str] = {}
         if auth:
-            hdrs.update(self._auth_headers(serial))
-        url = self._url(path, query)
-        try:
-            resp = self._client.request(method, url, json=json_body, headers=hdrs)
-        except httpx.HTTPError as exc:
-            raise DeviceApiError(f"transport error: {exc}", code="TRANSPORT") from exc
-        return self._parse(resp)
+            headers.update(self._auth_headers(serial))
+        url = build_url(self.api_root, path, query)
+        return request_json(self._client, method, url, json_body=json_body, headers=headers)
 
-    # -- public API ---------------------------------------------------------
+    # -- public API (design names) ------------------------------------------
 
-    def activate(self, serial: str, temp_key: str) -> dict[str, Any]:
-        if not serial or not temp_key:
-            raise DeviceApiError("serial and tempKey required", code="VALIDATION_FAILED")
-        if len(temp_key) < 16:
-            raise DeviceApiError("tempKey too short (<16)", code="VALIDATION_FAILED")
+    def activate(
+        self,
+        serial: str | None = None,
+        temp_key: str | None = None,
+    ) -> DeviceCredentials:
+        sn = (serial or self.serial or self.cfg.serial or "").strip()
+        key = (temp_key if temp_key is not None else self.cfg.temp_key) or ""
+        if not sn or not key:
+            raise MoishomeApiError("serial and tempKey required", code="VALIDATION_FAILED")
+        if len(key) < 16:
+            raise MoishomeApiError("tempKey too short (<16)", code="VALIDATION_FAILED")
         data = self._request(
             "POST",
             "/device-api/activate",
-            json_body={"serial": serial, "tempKey": temp_key},
+            json_body={"serial": sn, "tempKey": key},
         )
         if not isinstance(data, dict):
-            raise DeviceApiError("activate returned unexpected payload", body=data)
-        return data
+            raise MoishomeApiError("activate returned unexpected payload", body=data)
+        creds = DeviceCredentials.from_activate_data(
+            data, config_version=self.cfg.config_version
+        )
+        self.serial = creds.serial
+        self._creds = creds
+        if self.store is not None:
+            self.store.save(creds)
+        else:
+            logger.warning("activate succeeded but no CredentialStore configured; not persisted")
+        return creds
 
     def heartbeat(
         self,
@@ -186,14 +161,19 @@ class DeviceApiClient:
     ) -> Any:
         sn = serial or self.serial
         body: dict[str, Any] = {"serial": sn}
-        fw = firmware if firmware is not None else self.cfg.firmware
+        fw = self.cfg.firmware if firmware is None else firmware
         if fw:
             body["firmware"] = fw
             body["firmwareVersion"] = fw
-        cv = self.cfg.config_version if config_version is None else config_version
+        cv = self.config_version if config_version is None else config_version
         body["configVersion"] = cv
-        if attributes:
-            body["attributes"] = attributes
+        attrs = dict(attributes or {})
+        if self.sku and "sku" not in attrs:
+            attrs["sku"] = self.sku
+        if self.model and "model" not in attrs:
+            attrs["model"] = self.model
+        if attrs:
+            body["attributes"] = attrs
         return self._request(
             "POST",
             "/device-api/heartbeat",
@@ -202,7 +182,7 @@ class DeviceApiClient:
             serial=sn,
         )
 
-    def get_shadow(self, *, serial: str | None = None) -> Any:
+    def shadow(self, *, serial: str | None = None) -> Any:
         sn = serial or self.serial
         return self._request(
             "GET",
@@ -212,7 +192,50 @@ class DeviceApiClient:
             serial=sn,
         )
 
-    def get_catalog(
+    def ack_ota(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        reason: str = "",
+        serial: str | None = None,
+    ) -> Any:
+        allowed = {"downloading", "applied", "failed"}
+        if not job_id or status not in allowed:
+            raise MoishomeApiError(
+                "jobId and status (downloading|applied|failed) required",
+                code="VALIDATION_FAILED",
+            )
+        sn = serial or self.serial
+        body: dict[str, Any] = {"jobId": job_id, "status": status}
+        if reason:
+            body["reason"] = reason
+        return self._request(
+            "POST",
+            "/device-api/ota/ack",
+            json_body=body,
+            auth=True,
+            serial=sn,
+        )
+
+    def ack_config(self, version: int, *, serial: str | None = None) -> Any:
+        sn = serial or self.serial
+        data = self._request(
+            "POST",
+            "/device-api/config/ack",
+            json_body={"version": int(version)},
+            auth=True,
+            serial=sn,
+        )
+        if self.store is not None:
+            updated = self.store.update_config_version(int(version))
+            if updated is not None:
+                self._creds = updated
+        elif self._creds is not None:
+            self._creds.config_version = int(version)
+        return data
+
+    def cloud_catalog(
         self,
         *,
         serial: str | None = None,
@@ -221,14 +244,15 @@ class DeviceApiClient:
         isv: str = "",
         types: str = "",
     ) -> Any:
+        """Cloud content directory — **not** the local ``GET /api/catalog`` dfss list."""
         sn = serial or self.serial
         return self._request(
             "GET",
             "/device-api/catalog",
             query={
                 "serial": sn or "",
-                "model": model,
-                "sku": sku,
+                "model": model or self.model or "",
+                "sku": sku or self.sku or "",
                 "isv": isv,
                 "types": types,
             },
@@ -236,7 +260,7 @@ class DeviceApiClient:
             serial=sn,
         )
 
-    def check_entitlement(
+    def entitlement_check(
         self,
         *,
         serial: str | None = None,
@@ -263,37 +287,7 @@ class DeviceApiClient:
             serial=sn,
         )
 
-    def ack_ota(
-        self,
-        job_id: str,
-        status: str,
-        *,
-        reason: str = "",
-        serial: str | None = None,
-    ) -> Any:
-        sn = serial or self.serial
-        body: dict[str, Any] = {"jobId": job_id, "status": status}
-        if reason:
-            body["reason"] = reason
-        return self._request(
-            "POST",
-            "/device-api/ota/ack",
-            json_body=body,
-            auth=True,
-            serial=sn,
-        )
-
-    def ack_config(self, version: int, *, serial: str | None = None) -> Any:
-        sn = serial or self.serial
-        return self._request(
-            "POST",
-            "/device-api/config/ack",
-            json_body={"version": version},
-            auth=True,
-            serial=sn,
-        )
-
-    def get_compat(self, *, serial: str | None = None) -> Any:
+    def compat(self, *, serial: str | None = None) -> Any:
         sn = serial or self.serial
         return self._request(
             "GET",
@@ -302,3 +296,17 @@ class DeviceApiClient:
             auth=True,
             serial=sn,
         )
+
+    # -- draft aliases (kept for CLI / earlier helpers) ---------------------
+
+    def get_shadow(self, **kwargs: Any) -> Any:
+        return self.shadow(**kwargs)
+
+    def get_catalog(self, **kwargs: Any) -> Any:
+        return self.cloud_catalog(**kwargs)
+
+    def check_entitlement(self, **kwargs: Any) -> Any:
+        return self.entitlement_check(**kwargs)
+
+    def get_compat(self, **kwargs: Any) -> Any:
+        return self.compat(**kwargs)
